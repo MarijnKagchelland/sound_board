@@ -4,6 +4,8 @@ use std::vec::Vec;
 use cpal::{Device, DevicesError};
 use cpal::traits::{DeviceTrait, HostTrait};
 use egui::ahash::HashSet;
+
+use crate::audio::AudioBroadTypes::*;
 use crate::{verbose, info, warning, error, debug};
 use crate::log_system::LogLevels;
 use crate::log_system::{Local, OpenOptions, BufWriter, Colorize, Write};
