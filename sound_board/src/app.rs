@@ -1,20 +1,17 @@
 use std::sync::Arc;
-use std::fmt::format;
 use std::default::Default;
 
-use egui::panel::Side;
-use egui::Direction::TopDown;
-use egui::Align::{Center, Min};
-use egui::{CentralPanel, Context, ScrollArea, SidePanel, Vec2, viewport, Window};
+use egui::{Context, Vec2, viewport};
 use eframe::{Frame, HardwareAcceleration, NativeOptions, Renderer, Storage, Theme};
 
 use crate::log_system::log::*;
-use crate::pages::side_panel::*;
 use crate::pages::menubar::MenuBar;
-use crate::pages::{Page, side_panel};
+use crate::pages::side_panel::SidePanel;
 use crate::pages::modulation::Modulation;
+use crate::pages::*;
 
 struct ApplicationOptions;
+
 impl ApplicationOptions {
     fn options() -> Result<NativeOptions, String> {
         let image = include_bytes!("../assets/audioMixer.png");
@@ -25,12 +22,14 @@ impl ApplicationOptions {
                 app_id: None,
                 position: None,
 
-                inner_size: Some(Vec2{x: 1000., y: 800.}),
-                min_inner_size: None,
-                max_inner_size: None,
+                inner_size: Some(Vec2{x: 1280., y: 720.}), 
+                min_inner_size: Some(Vec2{x: 1280., y: 720.}),
+                max_inner_size: Some(Vec2{x: 1280., y: 720.}),
+                //min_inner_size: None,
+                //max_inner_size: None,
                 fullscreen: Some(false),
                 maximized: Some(false),
-                resizable: Some(false),
+                resizable: Some(true),
                 transparent: None,
                 decorations: None,
                 icon: Some(Arc::new(icon)),
@@ -74,32 +73,30 @@ impl ApplicationOptions {
 // #[serde(default)]
 #[derive(Default)]
 pub struct AudioMixerApp {
-    menubar_page: MenuBar,
-    side_panel_page: side_panel::SidePanel,
-    modulation_page: Modulation,
+    sound_board:        crate::audio::SoundBoard,
+    menubar_page:       MenuBar,
+    side_panel_page:    SidePanel,
+    modulation_page:    Modulation,
 }
 
 impl AudioMixerApp {
     pub fn start() {
         crate::info!("Starting application");
         eframe::run_native("Audio mixer app",
-                           ApplicationOptions::options().unwrap(),
-                           Box::new(|cc| Box::new(AudioMixerApp::new(cc)))).unwrap();
-        /* will never get to this point */
+            ApplicationOptions::options().unwrap(),
+            Box::new(|cc| Box::new(AudioMixerApp::new(cc)))).unwrap();
+        /* Will never get to this point */
     }
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         Self::default()
-    }
-    fn name(&self) -> &str {
-        "Audio mixer app"
     }
 }
 
 impl eframe::App for AudioMixerApp {
-    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
-        self.menubar_page.show(ctx);
-        self.side_panel_page.show(ctx);
-        self.modulation_page.show(ctx);
+    fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
+        self.menubar_page.show(ctx, &mut self.sound_board);
+        self.side_panel_page.show(ctx, &mut self.sound_board);
+        self.modulation_page.show(ctx, &mut self.sound_board);
     }
     fn save(&mut self, _storage: &mut dyn Storage) {
         // todo!()

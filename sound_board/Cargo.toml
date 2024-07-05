@@ -1,32 +1,36 @@
 [package]
-name = "sound_board"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.71.0"
+name            = "sound_board"
+version         = "0.1.0"
+edition         = "2021"
+rust-version    = "1.78.0"
 
 [dependencies]
-cpal = "0.15.3"
-
-
-egui = {version = "^0.27.2"}
-egui_extras = { version = "^0.27.2", features = ["image", "svg"]}
-epaint = {version = "0.27.2"}
-eframe = {version = "^0.27.2", default-features = false, features = [
+# GUI crates
+egui            = {version = "0.27.2", features = ["persistence"]}
+epaint          = {version = "0.27.2"}
+egui_extras     = {version = "0.27.2", features = ["image", "svg"]}
+image           = {version = "0.25.1", features = ["jpeg", "png", "webp"] }
+eframe          = {version = "0.27.2", default-features = false, features = [
     "default_fonts",
+    "persistence",
     "glow",
-    "persistence"
 ]}
-image = { version = "0.25.1", features = ["jpeg", "png", "webp"] }
-ellipse = { version = "0.2.0" }
 
-serde = { version = "^1", features = ["derive"] }
-serde_json = { version = "^1" }
+egui_graphs     = {version = "0", features = ["egui_persistence"]}
+petgraph        = {version = "0.6"}
 
-chrono = "0.4.38"
-colored = "2.1.0"
+# OS dependencies for audio system
+wasapi          = {version = "0.15.0"}
+sysinfo         = {version = "0.30.9"}
 
+# Next crates are for the logging system
+chrono          = {version = "0.4.38"}
+colored         = {version = "2.1.0"}
 
-
+# Saving settigs to json]
+#serde           = { version = "^1", features = ["derive"] }
+#serde_json      = { version = "^1" }
 
 [profile.release]
-opt-level = 2
+opt-level       = 3
+lto             = true

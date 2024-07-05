@@ -1,150 +1,138 @@
-use std::string::String;
-use std::ops::Add;
 use std::vec::Vec;
-use cpal::{Device, DevicesError};
-use cpal::traits::{DeviceTrait, HostTrait};
-use egui::ahash::HashSet;
+use std::string::String;
+use std::collections::HashMap;
+use std::sync::mpsc;
 
-use crate::audio::AudioBroadTypes::*;
-use crate::{verbose, info, warning, error, debug};
-use crate::log_system::LogLevels;
-use crate::log_system::{Local, OpenOptions, BufWriter, Colorize, Write};
+use wasapi::*;
+use crate::basic_audio_driver_rust::{ 
+    audio_stream::AudioStream, 
+    combine_streams::CombineStreams, 
+    modulation_stream::AudioModulation, 
+    CommandInterThread,
+    ThreadType
+};
+use crate::log_system::*;
 
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub enum AudioBroadTypes {
-    HardwareInput,
-    VirtualInput,
-    Modulation,
-    VirtualOutput,
-    HardwareOutput,
-}
-
-#[derive(Clone)]
-pub struct AudioStream {
-    audio_broad_type: AudioBroadTypes,
-    device: Option<Device>,
-}
-
-impl AudioStream {
-    fn new(audio_broad_type: AudioBroadTypes, device: Option<Device>) -> Self {
-        Self {
-            device,
-            audio_broad_type
-        }
-    }
+struct SoundTile {
+    audio_stream:       AudioStream,
+    communication_tx:   mpsc::Sender<CommandInterThread>,
+    communication_rx:   mpsc::Receiver<CommandInterThread>,
+    audio_tx:           Option<mpsc::Sender<Vec<u8>>>,
+    audio_rx:           Option<mpsc::Receiver<Vec<u8>>>,
 }
 
 pub struct SoundBoard {
-    hardware_audio_output: Vec<AudioStream>,
-    hardware_audio_input:  Vec<AudioStream>,
-    virtual_audio_output:  Vec<AudioStream>,
-    virtual_audio_input:   Vec<AudioStream>,
+    audio_streams_list: HashMap<String, SoundTile>,
+
 }
 
 impl SoundBoard {
     pub fn init() -> Self {
         Self {
-            virtual_audio_input: Vec::new(),
-            virtual_audio_output: Vec::new(),
-            hardware_audio_input: Vec::new(),
-            hardware_audio_output: Vec::new()
+            audio_streams_list: HashMap::new(),
         }
     }
-    pub fn update_hardware_devices(&mut self) -> Result<(), DevicesError> {
-        let mut host = cpal::default_host();
-        let input_devices_list = match host.input_devices() {
-            Err(val) => {
-                error!("Input device error: {:?}", val);
-                return Err(val);
+
+    pub fn update_hardware_devices(&mut self) {
+        let borrow_list = &DeviceCollection::new(&Direction::Render); 
+        let device_collection = match borrow_list {
+            Ok(data)    => data,
+            Err(err)    => {
+                error!("Can not update output device list. Error: {}", err);
+                return;
             }
-            Ok(input_devices) => {
-                input_devices
-            },
         };
-        let output_devices_list = match host.output_devices() {
-            Err(val) => {
-                error!("output device error: {:?}", val);
-                return Err(val);
+
+        let mut vec = vec![];
+        for dev in device_collection {
+            let device      = dev.unwrap();
+            let name        = &device.get_friendlyname().unwrap();
+            if self.audio_streams_list.contains_key(name) == false {
+                let (stream, audio_tx, com_rx, com_tx) = 
+                AudioStream::output_hardware_template(4096, name);
+                let sound_tile = SoundTile {
+                    audio_stream:       stream,
+                    audio_rx:           None,
+                    audio_tx:           Some(audio_tx),
+                    communication_tx:   com_tx,
+                    communication_rx:   com_rx
+                };
+                self.audio_streams_list.insert(name.to_string(), sound_tile);
             }
-            Ok(input_devices) => {
-                input_devices
-            },
+            vec.push(name.clone());
+        }
+
+        let borrow_list = &DeviceCollection::new(&Direction::Capture);
+        let device_collection = match borrow_list {
+            Ok(data)    => data,
+            Err(err)    => {
+                error!("Can not update input device list. Error: {}", err);
+                return;
+            }
         };
-        let mut input_devices = Vec::new();
-        for device in input_devices_list {
-            input_devices.push(device);
-        }
-        let mut output_devices = Vec::new();
-        for device in output_devices_list {
-            output_devices.push(device);
-        }
-        let current_input_device: Vec<_> = input_devices.iter().map(|d| d.clone()).collect();
-        let current_output_device: Vec<_> = output_devices.iter().map(|d| d.clone()).collect();
 
-        let mut filtered_in_audio_streams = Vec::new();
-        for audio_stream in self.hardware_audio_input.clone() {
-            for device in &current_input_device {
-                if String::from(device.name().unwrap()) == String::from(&audio_stream.device.as_ref().unwrap().name().unwrap()) {
-                    filtered_in_audio_streams.push(AudioStream::new(HardwareInput, Some(device.clone())));
-                    break;
+        for dev in device_collection {
+            let device      = dev.unwrap();
+            let name        = &device.get_friendlyname().unwrap();
+            if self.audio_streams_list.contains_key(name) == false {
+                let (stream, audio_rx, com_rx, com_tx) = 
+                AudioStream::input_hardware_template(4096, name);
+                let sound_tile = SoundTile {
+                    audio_stream:       stream,
+                    audio_rx:           Some(audio_rx),
+                    audio_tx:           None,
+                    communication_tx:   com_tx,
+                    communication_rx:   com_rx
+                };
+                self.audio_streams_list.insert(name.to_string(), sound_tile);
+            }
+            vec.push(name.clone());
+        }
+        self.filter_audio_list(&vec);
+    }
+
+    fn filter_audio_list(&mut self, key_list: &Vec<String>) {
+        let mut vec = vec![];
+        for (key, _) in self.audio_streams_list.iter() {
+            vec.push(key.clone());
+        }
+        for key in vec {
+            if !key_list.contains(&key) {
+                let stream = match self.audio_streams_list.get(&key) {
+                    Some(stream) => stream,
+                    None => continue,
+                };
+                match stream.audio_stream.get_stream_type() {
+                    ThreadType::ApplicationCaptureThread => (),
+                    _ => {
+                        verbose!("Removed: {}", key);
+                        let _ = self.audio_streams_list.remove(&key);
+                    }
                 }
             }
         }
-        let mut filtered_out_audio_streams: Vec<_> = self.hardware_audio_output.clone().into_iter()
-            .filter(|audio_stream| {
-                for device in &current_output_device {
-                    if String::from(device.name().unwrap()) == String::from(&audio_stream.device.clone().unwrap().name().unwrap()) {
-                        return true;
-                    }
-                }
-                false})
-                .collect();
+    }
 
-        let existing_input_devices: Vec<_> = filtered_in_audio_streams.iter()
-            .map(|audio_stream| audio_stream.device.as_ref().unwrap().clone())
-            .collect();
-        let existing_output_devices: Vec<_> = filtered_out_audio_streams.iter()
-            .map(|audio_stream| audio_stream.device.as_ref().unwrap().clone())
-            .collect();
-        let mut new_input_devices: Vec<_> = current_input_device.iter()
-            .filter(|d| {
-                for device in &existing_input_devices {
-                    if String::from(device.name().unwrap()) != d.name().unwrap() {
-                        return true;
-                    }
-                }
-            false}).collect();
-        let mut new_output_devices: Vec<_>= current_output_device.iter()
-            .filter(|d| {
-                for device in &existing_output_devices {
-                    if String::from(device.name().unwrap()) != d.name().unwrap() {
-                        return true;
-                    }
-                }
-                false}).collect();
+    pub fn get_hardware_output_list(&self) -> Vec<&str> {
+        let mut vec = Vec::new();
+        for (_key, tile) in self.audio_streams_list.iter() {
+            let stream = &tile.audio_stream;
+            let name = stream.get_name();
+            match stream.get_stream_type() {
+                ThreadType::OutputCaptureThread => vec.push(name),
+                _ => ()
+            }
+        }
+        vec
+    }
+}
 
-        self.hardware_audio_input.clear();
-        self.hardware_audio_output.clear();
-        self.hardware_audio_input = filtered_in_audio_streams;
-        self.hardware_audio_output = filtered_out_audio_streams;
-
-        for mut device in new_input_devices {
-            self.hardware_audio_input.push(AudioStream::new(HardwareInput, Some(device.clone())));
+impl Default for SoundBoard {
+    fn default() -> Self {
+        let mut sound_board = Self::init();
+        let _ = sound_board.update_hardware_devices();
+        Self {
+            audio_streams_list: sound_board.audio_streams_list,
         }
-        for device in new_output_devices {
-            self.hardware_audio_output.push(AudioStream::new(HardwareOutput, Some(device.clone())));
-        }
-        let mut string = String::from("New hardware input devices list:");
-        for audio_stream in self.hardware_audio_input.clone() {
-            string = string.add(format!("\n\r\t{}", audio_stream.device.unwrap().name().unwrap()).as_str());
-        }
-        verbose!("{}", string);
-        let mut string = String::from("New hardware output devices list:");
-        for audio_stream in self.hardware_audio_output.clone() {
-            string = string.add(&format!("\n\r\t{}", audio_stream.device.unwrap().name().unwrap()).as_str());
-        }
-        verbose!("{}", string);
-        Ok(())
     }
 }
